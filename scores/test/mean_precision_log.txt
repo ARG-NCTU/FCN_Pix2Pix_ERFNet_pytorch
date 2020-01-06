@@ -1,0 +1,1 @@
+name:FCNs_batch4_epoch128_RMSprop_lr0.0001.pkl, mean precision: 0.9047293473137143941

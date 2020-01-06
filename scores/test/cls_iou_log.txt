@@ -1,0 +1,1 @@
+name:FCNs_batch4_epoch128_RMSprop_lr0.0001.pkl, class ious: [0.77203944 0.9429421  0.8490619  0.89068588]

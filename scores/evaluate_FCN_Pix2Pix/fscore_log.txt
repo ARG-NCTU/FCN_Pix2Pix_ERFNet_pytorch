@@ -1,0 +1,1 @@
+name:FCN_Pix2Pix_batch4_epoch60_RMSprop_lr0.0001.pkl, class fscore: [0.78433013 0.85059601 0.7260097  0.68021942]

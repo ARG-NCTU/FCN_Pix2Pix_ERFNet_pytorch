@@ -1,0 +1,1 @@
+name:FCN_Pix2Pix_batch4_epoch60_RMSprop_lr0.0001.pkl, mean fscore: 0.76028881629933202314

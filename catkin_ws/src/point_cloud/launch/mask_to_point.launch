@@ -1,0 +1,10 @@
+<?xml version="1.0" ?>
+<launch>
+  <node pkg="point_cloud" type="mask_to_point" name="mask_to_point" output="screen">
+  	<remap from="mask" to="/mask_to_point"/>
+  </node>
+  <node pkg="point_cloud" type="pub_arti_pose" name="pub_arti_pose" output="screen">
+ 
+  </node>
+
+</launch>

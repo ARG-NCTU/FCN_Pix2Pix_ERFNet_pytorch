@@ -1,0 +1,1 @@
+name:FCN_Pix2Pix_batch4_epoch60_RMSprop_lr0.0001.pkl, class recall: [0.73806901 0.76879764 0.62796481 0.60086856]

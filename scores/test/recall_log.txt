@@ -1,0 +1,1 @@
+name:FCNs_batch4_epoch128_RMSprop_lr0.0001.pkl, class recall: [0.85385456 0.98364472 0.96776671 0.99143543]

@@ -1,0 +1,1 @@
+name:FCN_Pix2Pix_batch4_epoch60_RMSprop_lr0.0001.pkl, class precision: [0.8367782  0.95187322 0.86033477 0.78371735]
