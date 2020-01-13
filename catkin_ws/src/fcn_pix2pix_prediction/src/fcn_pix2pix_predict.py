@@ -13,7 +13,6 @@ import math
 import time
 import sys
 import PIL
-#import rospkg
 import pandas as pd
 import scipy.misc
 import random
@@ -86,7 +85,7 @@ class FCN16s(nn.Module):
 
 
 class VGGNet(VGG):
-	def __init__(self, cfg, pretrained=True, model='vgg16', requires_grad=True, remove_fc=True, show_params=False):
+	def __init__(self, cfg, pretrained=False, model='vgg16', requires_grad=True, remove_fc=True, show_params=False):
 		super(VGGNet, self).__init__(self.make_layers(cfg[model]))
 		ranges = {
 			'vgg11': ((0, 3), (3, 6),  (6, 11),  (11, 16), (16, 21)),
@@ -149,12 +148,13 @@ class FCN_Pix2Pix_PREDICT():
 			'vgg19': [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 256, 'M', 512, 512, 512, 512, 'M', 512, 512, 512, 512, 'M'],
 		}
 		self.means = np.array([103.939, 116.779, 123.68]) / \
-							  255.  # mean of three channels in the order of BGR
+			255.  # mean of three channels in the order of BGR
 		self.h, self.w = 480, 640
 		self.n_class = 5
 		model_name = "fcn_pix2pix.pkl"
 		self.vgg_model = VGGNet(self.cfg, requires_grad=True, remove_fc=True)
-		self.fcn_model = FCN16s(pretrained_net=self.vgg_model, n_class=self.n_class)
+		self.fcn_model = FCN16s(
+			pretrained_net=self.vgg_model, n_class=self.n_class)
 
 		use_gpu = torch.cuda.is_available()
 		num_gpu = list(range(torch.cuda.device_count()))
@@ -164,18 +164,18 @@ class FCN_Pix2Pix_PREDICT():
 			ts = time.time()
 			self.vgg_model = self.vgg_model.cuda()
 			self.fcn_model = self.fcn_model.cuda()
-			self.fcn_model = nn.DataParallel(self.fcn_model, device_ids=num_gpu)
+			self.fcn_model = nn.DataParallel(
+				self.fcn_model, device_ids=num_gpu)
 			print("Finish cuda loading, time elapsed {}".format(time.time() - ts))
-		state_dict = torch.load(os.path.join(self.path, "weights/", model_name))
+		state_dict = torch.load(os.path.join(
+			self.path, "weights/", model_name))
 		self.fcn_model.load_state_dict(state_dict)
 
 		self.mask1 = np.zeros((self.h, self.w))
-		self.MAXAREA = 18000
-		self.MINAREA = 1000
-		self.brand = ['','extinguisher', 'backpack', 'drill', 'survivor']
+		self.brand = ['', 'extinguisher', 'backpack', 'drill', 'survivor']
 		rospy.loginfo("Node ready!")
 
-		# -------point cloud with color-------
+		# =======================message_filters=================================
 		self.depth_sub = message_filters.Subscriber(
 			"/camera/aligned_depth_to_color/image_raw", Image)
 		self.image_sub = message_filters.Subscriber("/camera/color/image_raw", Image)
@@ -183,56 +183,75 @@ class FCN_Pix2Pix_PREDICT():
 		self.ts = message_filters.ApproximateTimeSynchronizer(
 			[self.image_sub, self.depth_sub], 5, 5)
 		self.ts.registerCallback(self.img_cb)
-		# ------------------------------------
+		# =======================message_filters=================================
 
-		# self.pc_pub = rospy.Publisher("/pointcloud2_transformed", PointCloud2, queue_size=1)
+		# self.image_sub = rospy.Subscriber(
+		# 	"/camera/color/image_raw", Image, self.img_cb)
+		# self.depth_sub = rospy.Subscriber(
+		# 	"/camera/aligned_depth_to_color/image_raw", Image, self.depth_cb)
+
+
 		self.rgb_pub = rospy.Publisher("/predict_img", Image, queue_size=1)
 		#self.image_pub = rospy.Publisher("/predict_mask", Image, queue_size=1)
-		self.msg_pub = rospy.Publisher("/mask_to_point", arti_input, queue_size=1)
-		self.masks_pub = rospy.Publisher("/fcn_pix2pix_prediction/masks", masks, queue_size = 1)
-		self.points = []
-		self.time_total = 0
-		self.time_count = 0
+		self.msg_pub = rospy.Publisher(
+			"/mask_to_point", arti_input, queue_size=1)
+		self.masks_pub = rospy.Publisher(
+			"/fcn_pix2pix_prediction/masks", masks, queue_size=1)
+
 		rospy.loginfo("Start Predicting image")
+		self.depth_data = None
+		self.rgb_data = None
+
+		self.timer = rospy.Timer(rospy.Duration(0.1), self.timer_cb)
+
+	# def depth_cb(self, depth_data):
+	# 	#cv_depthimage = self.bridge.imgmsg_to_cv2(depth_data, "16UC1")
+	# 	self.depth_data = depth_data
 
 	def img_cb(self, rgb_data, depth_data):
-		
-		cv_image = self.bridge.imgmsg_to_cv2(rgb_data, "bgr8")
-		cv_depthimage = self.bridge.imgmsg_to_cv2(depth_data, "16UC1")
-		now = rospy.get_time()
-		generate_img, X ,Y, obj_list = self.predict(cv_image)
-		self.time_total = self.time_total + rospy.get_time() - now
-		self.time_count = self.time_count + 1
-		rospy.loginfo("Average time : %f , Hz : %f ", self.time_total /
-						self.time_count, self.time_count/self.time_total)
-		
-		msg = arti_input()
-		msg.image = rgb_data
-		msg.depth = depth_data
-		if(X == 0 and Y == 0):
-			generate_img[generate_img > 0] = 0
-		msg.mask = self.bridge.cv2_to_imgmsg(generate_img, "8UC1")
-		self.msg_pub.publish(msg)
+		self.rgb_data = rgb_data
+		self.depth_data = depth_data
 
-		if len(obj_list):
-			mask_out = masks()
-			for objs in obj_list: 
-				mask_center_point = mask_center()
-				mask_center_point.Class = self.brand[objs[2]]
-				mask_center_point.x = objs[0]
-				mask_center_point.y = objs[1]
-				mask_out.masks.append(mask_center_point)
-				
+	def timer_cb(self, event):
+		if self.depth_data is not None and self.rgb_data is not None:
+			cv_image = self.bridge.imgmsg_to_cv2(self.rgb_data, "bgr8")
 
-			mask_out.header = rgb_data.header				
-			mask_out.depth = depth_data
-			mask_out.count = len(obj_list)
-			mask_out.camera = "middle"
-			self.masks_pub.publish(mask_out)
+			generate_img, predict_img, cX, cY, obj_list = self.predict(
+				cv_image)
 
+			msg = arti_input()
+			msg.image = self.rgb_data
+			msg.depth = self.depth_data
+			if(cX == 0 or cY == 0):
+				generate_img[generate_img > 0] = 0
+			msg.mask = self.bridge.cv2_to_imgmsg(generate_img, "8UC1")
+			self.msg_pub.publish(msg)
+
+			if len(obj_list):
+				mask_out = masks()
+				for objs in obj_list:
+					mask_center_point = mask_center()
+					mask_center_point.Class = self.brand[objs[2]]
+					mask_center_point.x = objs[0]
+					mask_center_point.y = objs[1]
+					mask_out.masks.append(mask_center_point)
+
+				mask_out.header = self.rgb_data.header
+				mask_out.depth = self.depth_data
+				mask_out.count = len(obj_list)
+				mask_out.camera = "right"
+				self.masks_pub.publish(mask_out)
+
+				#print("Artifact: {}".format(self.brand[objs[2]]))
+
+			self.rgb_pub.publish(
+				self.bridge.cv2_to_imgmsg(predict_img, "bgr8"))
+			
+			self.depth_data = None
+			self.rgb_data = None
 
 	def predict(self, img):
-		origin = img
+		rgb_predict = img
 		img = img[:, :, ::-1]  # switch to BGR
 
 		img = np.transpose(img, (2, 0, 1)) / 255.
@@ -246,96 +265,97 @@ class FCN_Pix2Pix_PREDICT():
 
 		output = self.fcn_model(img)
 		output = output.data.cpu().numpy()
-		
+
 		N, _, h, w = output.shape
 		mask = output.transpose(0, 2, 3, 1)
-		mask = mask.reshape(-1,self.n_class).argmax(axis=1)
+		mask = mask.reshape(-1, self.n_class).argmax(axis=1)
 		mask = mask.reshape(N, h, w)[0]
 		mask = np.asarray(mask, np.uint8)
 
 		# =======================Filter=================================
-		cnts = cv2.findContours(mask, cv2.RETR_CCOMP  ,cv2.CHAIN_APPROX_SIMPLE)[0]
+		cnts, _ = cv2.findContours(
+			mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)[-2:]
 
 		obj_list = []
-		X = 0
-		Y = 0
-		obj = 0
+		cX = 0
+		cY = 0
 
 		for c in cnts:
 			M = cv2.moments(c)
-			if M["m00"] == 0 :
+			if M["m00"] == 0:
 				break
 			cX = int(M["m10"] / M["m00"])
 			cY = int(M["m01"] / M["m00"])
 			area = cv2.contourArea(c)
-			
-			if area > 400 :
-				cv2.circle(origin, (cX, cY), 10, (1, 227, 254), -1)
+
+			if area > 150:
+				cv2.circle(rgb_predict, (cX, cY), 10, (1, 227, 254), -1)
 				class_name = mask[cY][cX]
-				cv2.putText(origin, self.brand[mask[cY][cX]], (cX-50, cY-40), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (252, 197, 5), 3)
+				cv2.putText(rgb_predict, self.brand[mask[cY][cX]], (
+					cX-50, cY-40), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (252, 197, 5), 3)
 				obj_list.append([cX, cY, class_name])
-			
-				X = cX
-				Y = cY
+
+		return mask, rgb_predict, cX, cY, obj_list
 
 		# =======================Filter=================================
 		# =======================connected components=======4Hz=========
-			
+
 		#labels = self.adj(mask)
 		#labels = np.asarray(labels, np.uint8)
 		#mask1 = labels.copy()
 		#self.mask1[self.mask1 > 0] = 255
-	
-		# =======================connected components====================
-		
-		#self.image_pub.publish(self.bridge.cv2_to_imgmsg(mask, "8UC1"))
-		self.rgb_pub.publish(self.bridge.cv2_to_imgmsg(origin, "bgr8"))
-		return mask, X, Y, obj_list
 
-		
-	def adj(self, _img, _level = 8):
-		colomn, row = self.h, self.w
-		_count = 0
-		_pixel_pair = []
-		label = np.zeros((colomn,row))
-		for i in range(colomn):
-			for j in range(row):
-				if (_img[i,j] == 1 and label[i,j] == 0):
-					_pixel_pair.append([i,j])
-					_count += 1
-				while len(_pixel_pair) != 0:
-					pair = _pixel_pair.pop()
-					a = pair[1] + 1
-					b = pair[1] - 1
-					c = pair[0] + 1
-					d = pair[0] - 1
-					if a == 640 : a -= 1
-					if b == -1  : b += 1
-					if c == 480 : c -= 1
-					if d == -1  : d += 1
-					if _img[pair[0],a] == 1 and label[pair[0],a] == 0:
-						_pixel_pair.append([pair[0],a])
-					if _img[pair[0],b] == 1 and label[pair[0],b] == 0:
-						_pixel_pair.append([pair[0],b])
-					if _img[c,pair[1]] == 1 and label[c,pair[1]] == 0:
-						_pixel_pair.append([c,pair[1]])
-					if _img[d,pair[1]] == 1 and label[d,pair[1]] == 0:
-						_pixel_pair.append([d,pair[1]])
-					if _level == 8:
-						if _img[c,a] == 1 and label[c,a] == 0:
-							_pixel_pair.append([c,a])
-						if _img[d,a] == 1 and label[d,a] == 0:
-							_pixel_pair.append([d,a])
-						if _img[d,b] == 1 and label[d,b] == 0:
-							_pixel_pair.append([d,b])
-						if _img[c,b] == 1 and label[c,b] == 0:
-							_pixel_pair.append([c,b])
-					label[pair[0],pair[1]] = _count
-		print("Num of classes for connected components : ", _count)
-		return label
+		# =======================connected components====================
+
+		#self.image_pub.publish(self.bridge.cv2_to_imgmsg(mask, "8UC1"))
+
+	# def adj(self, _img, _level = 8):
+	# 	colomn, row = self.h, self.w
+	# 	_count = 0
+	# 	_pixel_pair = []
+	# 	label = np.zeros((colomn,row))
+	# 	for i in range(colomn):
+	# 		for j in range(row):
+	# 			if (_img[i,j] == 1 and label[i,j] == 0):
+	# 				_pixel_pair.append([i,j])
+	# 				_count += 1
+	# 			while len(_pixel_pair) != 0:
+	# 				pair = _pixel_pair.pop()
+	# 				a = pair[1] + 1
+	# 				b = pair[1] - 1
+	# 				c = pair[0] + 1
+	# 				d = pair[0] - 1
+	# 				if a == 640 : a -= 1
+	# 				if b == -1  : b += 1
+	# 				if c == 480 : c -= 1
+	# 				if d == -1  : d += 1
+	# 				if _img[pair[0],a] == 1 and label[pair[0],a] == 0:
+	# 					_pixel_pair.append([pair[0],a])
+	# 				if _img[pair[0],b] == 1 and label[pair[0],b] == 0:
+	# 					_pixel_pair.append([pair[0],b])
+	# 				if _img[c,pair[1]] == 1 and label[c,pair[1]] == 0:
+	# 					_pixel_pair.append([c,pair[1]])
+	# 				if _img[d,pair[1]] == 1 and label[d,pair[1]] == 0:
+	# 					_pixel_pair.append([d,pair[1]])
+	# 				if _level == 8:
+	# 					if _img[c,a] == 1 and label[c,a] == 0:
+	# 						_pixel_pair.append([c,a])
+	# 					if _img[d,a] == 1 and label[d,a] == 0:
+	# 						_pixel_pair.append([d,a])
+	# 					if _img[d,b] == 1 and label[d,b] == 0:
+	# 						_pixel_pair.append([d,b])
+	# 					if _img[c,b] == 1 and label[c,b] == 0:
+	# 						_pixel_pair.append([c,b])
+	# 				label[pair[0],pair[1]] = _count
+	# 	print("Num of classes for connected components : ", _count)
+	# 	return label
+	
+	def onShutdown(self):
+		rospy.loginfo("Shutdown.")		
 
 
 if __name__ == '__main__':
 	rospy.init_node('FCN_Pix2Pix_PREDICT')
 	foo = FCN_Pix2Pix_PREDICT()
+	rospy.on_shutdown(foo.onShutdown)
 	rospy.spin()
